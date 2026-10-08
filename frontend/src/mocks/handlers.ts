@@ -1,6 +1,6 @@
 import { delay, http, HttpResponse } from 'msw';
 import type { Conversation, Message } from '../api/types';
-import { conversations, entitlements, type StoredConversation } from './data';
+import { conversations, entitlements, MOCK_VALID_TOKENS, type StoredConversation } from './data';
 
 const BASE = '/api/v1';
 const SCOPE = `${BASE}/clients/:clientId/products/:productId`;
@@ -11,10 +11,12 @@ type ConvParams = ScopeParams & { conversationId: string };
 const problem = (status: number, title: string, detail?: string) =>
   HttpResponse.json({ status, title, detail }, { status, headers: { 'Content-Type': 'application/problem+json' } });
 
-/** Same checks the backend does: bearer present, then (client, product) entitlement. */
+/** Same checks the backend does: valid bearer token, then (client, product) entitlement. */
 function authorize(request: Request, params?: ScopeParams): Response | null {
-  if (!request.headers.get('Authorization')?.startsWith('Bearer ')) {
-    return problem(401, 'Unauthorized', 'Missing bearer token');
+  const header = request.headers.get('Authorization') ?? '';
+  if (!header.startsWith('Bearer ')) return problem(401, 'Unauthorized', 'Missing bearer token');
+  if (!MOCK_VALID_TOKENS.includes(header.slice(7).trim())) {
+    return problem(401, 'Unauthorized', 'Token is invalid or expired');
   }
   if (params) {
     const client = entitlements.clients.find((c) => c.id === params.clientId);

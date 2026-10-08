@@ -1,5 +1,6 @@
 import type { Entitlements } from '../api/types';
-import { initials } from './Icon';
+import { clearToken } from '../auth/token';
+import { Icon, initials } from './Icon';
 
 export function UserCard({ user }: { user: Entitlements }) {
   return (
@@ -9,6 +10,9 @@ export function UserCard({ user }: { user: Entitlements }) {
         <span className="user-card__name">{user.displayName}</span>
         <span className="user-card__email">{user.email}</span>
       </span>
+      <button className="icon-button user-card__signout" onClick={clearToken} aria-label="Sign out" title="Sign out">
+        <Icon name="signOut" />
+      </button>
     </div>
   );
 }

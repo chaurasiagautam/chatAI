@@ -330,7 +330,8 @@ Implemented in `frontend/` — see [frontend/README.md](../frontend/README.md).
 - Selecting a product opens a new chat window for that client/product; the first message creates the conversation.
 - Selected scope lives in the URL (`/c/{clientId}/p/{productId}/{conversationId}`) so links are shareable/bookmarkable (still guarded by entitlements).
 - A conversation never changes scope; starting a chat in another product = new conversation.
-- Token is held in memory by the OIDC lib and attached to every API call; 401 → silent refresh → retry once → else re-login.
+- **Sign-in (v1): pasted bearer token.** The UI opens on a sign-in screen where the user pastes their bearer token. The UI verifies it with `GET /me/entitlements`; only a 200 unlocks the app, and the response seeds the client/product pickers. The token is kept in `sessionStorage` (cleared when the tab closes) and attached to every call; any 401 later returns the user to the sign-in screen. Sign out clears the token and all cached data.
+- **Later: OIDC (PKCE) login** replaces the paste step — the token is then held in memory by the OIDC lib; 401 → silent refresh → retry once → else re-login. Only `auth/token.ts` and the sign-in screen change.
 
 ---
 

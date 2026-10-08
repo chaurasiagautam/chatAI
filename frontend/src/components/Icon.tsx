@@ -10,6 +10,7 @@ const paths = {
   sidebar: 'M4 5h16v14H4zM9 5v14',
   check: 'M5 12l5 5 9-10',
   chat: 'M4 5h16v11H8l-4 4z',
+  signOut: 'M15 4h4v16h-4M10 8l-4 4 4 4M6 12h10',
   box: 'M12 3l8 4.5v9L12 21l-8-4.5v-9L12 3zM4 7.5l8 4.5 8-4.5M12 12v9',
 } as const;
 

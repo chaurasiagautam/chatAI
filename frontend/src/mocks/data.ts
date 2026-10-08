@@ -30,6 +30,9 @@ export const entitlements: Entitlements = {
   ],
 };
 
+/** Tokens the mocked entitlement service accepts. Anything else gets 401. */
+export const MOCK_VALID_TOKENS = ['demo-token'];
+
 const hoursAgo = (h: number) => new Date(Date.now() - h * 3_600_000).toISOString();
 
 interface StoredConversation extends Conversation {

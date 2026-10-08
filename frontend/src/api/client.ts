@@ -1,4 +1,4 @@
-import { getAccessToken } from '../auth/token';
+import { clearToken, getAccessToken } from '../auth/token';
 import { readSse } from './sse';
 import type { ChatStreamEvent, Conversation, Entitlements, Message, Page, Problem } from './types';
 
@@ -10,8 +10,7 @@ export class ApiError extends Error {
   }
 }
 
-async function request(path: string, init: RequestInit = {}): Promise<Response> {
-  const token = await getAccessToken();
+async function request(path: string, init: RequestInit = {}, token = getAccessToken()): Promise<Response> {
   const res = await fetch(new URL(BASE + path, window.location.origin), {
     ...init,
     headers: {
@@ -21,6 +20,8 @@ async function request(path: string, init: RequestInit = {}): Promise<Response> 
       Authorization: `Bearer ${token}`,
     },
   });
+  // Token rejected (expired/revoked) while signed in: drop it so the sign-in screen shows again.
+  if (res.status === 401 && token === tryGetToken()) clearToken();
   if (!res.ok) {
     const problem: Problem = await res
       .json()
@@ -30,8 +31,16 @@ async function request(path: string, init: RequestInit = {}): Promise<Response> 
   return res;
 }
 
-async function json<T>(path: string, init?: RequestInit): Promise<T> {
-  const res = await request(path, init);
+function tryGetToken(): string | null {
+  try {
+    return getAccessToken();
+  } catch {
+    return null;
+  }
+}
+
+async function json<T>(path: string, init?: RequestInit, token?: string): Promise<T> {
+  const res = await request(path, init, token);
   return res.status === 204 ? (undefined as T) : res.json();
 }
 
@@ -40,6 +49,9 @@ const scope = (clientId: string, productId: string) =>
 
 export const api = {
   entitlements: () => json<Entitlements>('/me/entitlements'),
+
+  /** Validates a pasted token: the backend resolves it via the entitlement service (401 if invalid). */
+  verifyToken: (token: string) => json<Entitlements>('/me/entitlements', undefined, token),
 
   listConversations: (clientId: string, productId: string) =>
     json<Page<Conversation>>(`${scope(clientId, productId)}/conversations`),

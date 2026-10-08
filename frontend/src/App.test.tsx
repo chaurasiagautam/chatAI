@@ -2,16 +2,42 @@ import { render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { setupServer } from 'msw/node';
 import { App } from './App';
+import { clearToken } from './auth/token';
 import { handlers } from './mocks/handlers';
 
 const server = setupServer(...handlers);
 beforeAll(() => server.listen({ onUnhandledRequest: 'error' }));
 afterAll(() => server.close());
-beforeEach(() => window.history.replaceState(null, '', '/'));
+beforeEach(() => {
+  clearToken();
+  window.history.replaceState(null, '', '/');
+});
+
+async function signIn(user: ReturnType<typeof userEvent.setup>, token = 'demo-token') {
+  await user.type(await screen.findByLabelText('Bearer token'), token);
+  await user.click(screen.getByRole('button', { name: 'Continue' }));
+}
+
+test('UI stays locked until a valid token is pasted', async () => {
+  const user = userEvent.setup();
+  render(<App />);
+
+  await signIn(user, 'not-a-real-token');
+  expect(await screen.findByRole('alert')).toHaveTextContent('invalid or has expired');
+  expect(screen.queryByRole('navigation', { name: 'Products' })).not.toBeInTheDocument();
+
+  await user.clear(screen.getByLabelText('Bearer token'));
+  await signIn(user);
+  expect(await screen.findByRole('navigation', { name: 'Products' })).toBeInTheDocument();
+
+  await user.click(screen.getByRole('button', { name: 'Sign out' }));
+  expect(await screen.findByLabelText('Bearer token')).toBeInTheDocument();
+});
 
 test('pick client, open a product, chat and see the streamed answer', async () => {
   const user = userEvent.setup();
   render(<App />);
+  await signIn(user);
 
   // Sidebar: client on top, user at the bottom, products in between.
   expect(await screen.findByRole('button', { name: /ACME Corp/ })).toBeInTheDocument();
@@ -38,6 +64,7 @@ test('pick client, open a product, chat and see the streamed answer', async () =
 test('switching client changes the product list', async () => {
   const user = userEvent.setup();
   render(<App />);
+  await signIn(user);
   await user.click(await screen.findByRole('button', { name: /ACME Corp/ }));
   await user.click(screen.getByRole('option', { name: /Globex/ }));
   const products = screen.getByRole('navigation', { name: 'Products' });
