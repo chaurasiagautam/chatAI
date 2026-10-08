@@ -2,6 +2,7 @@ import { useQueryClient } from '@tanstack/react-query';
 import { useState } from 'react';
 import { ApiError, api } from '../api/client';
 import { setToken } from '../auth/token';
+import { config } from '../config';
 import { keys } from '../hooks/queries';
 
 /** Sign-in screen: the user pastes a bearer token, the backend verifies it before any UI is shown. */
@@ -74,7 +75,7 @@ export function TokenGate() {
         <button type="submit" className="gate__submit" disabled={!value.trim() || checking}>
           {checking ? 'Verifying…' : 'Continue'}
         </button>
-        {import.meta.env.VITE_USE_MOCKS === 'true' && (
+        {config.useMocks && (
           <p className="gate__hint">
             Mock mode: use <code>demo-token</code>
           </p>

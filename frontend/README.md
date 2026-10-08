@@ -9,12 +9,28 @@ npm install
 npm run dev        # http://localhost:5173
 ```
 
-By default **every HTTP call is mocked** in the browser with [MSW](https://mswjs.io) (`VITE_USE_MOCKS=true` in `.env`).
-The app code makes real `fetch` calls to `/api/v1/...`; MSW intercepts them, so switching to the real backend is just:
+By default **every HTTP call is mocked** in the browser with [MSW](https://mswjs.io).
+The app code makes real `fetch` calls; MSW intercepts them.
 
-```bash
-VITE_USE_MOCKS=false npm run dev   # /api is proxied to http://localhost:8080
+## Configuration — `.env`
+
+All URLs live in **`frontend/.env`** (Vite's equivalent of `application.properties`). `src/config.ts` reads it and builds every API endpoint; the API client, the MSW mocks and the dev server all use it.
+
+| Property | Default | Meaning |
+|---|---|---|
+| `VITE_USE_MOCKS` | `true` | `true` = MSW answers every API call; `false` = call the real backend |
+| `VITE_API_BASE_URL` | `/api/v1` | Base URL of the REST API. Relative = same origin (proxied in dev, CloudFront in AWS); absolute = separate API host (needs CORS) |
+| `VITE_BACKEND_URL` | `http://localhost:8080` | Dev server only — where a relative `VITE_API_BASE_URL` is proxied |
+| `VITE_DEV_PORT` | `5173` | Dev server only — port for `npm run dev` |
+
+To change values on your machine without touching the committed file, create **`.env.local`** (git-ignored) with just the overrides, e.g. to use the real backend:
+
+```properties
+VITE_USE_MOCKS=false
+VITE_BACKEND_URL=http://localhost:8080
 ```
+
+Per-environment builds can use `.env.production` / `.env.development`. Values are baked in at build time — restart `npm run dev` after editing.
 
 ## Scripts
 
@@ -29,6 +45,7 @@ VITE_USE_MOCKS=false npm run dev   # /api is proxied to http://localhost:8080
 
 ```
 src/
+├── config.ts     # reads .env; every API URL/endpoint is defined here
 ├── api/          # REST client, types (mirror docs §6), SSE stream parser
 ├── auth/         # bearer token provider (placeholder until OIDC login)
 ├── hooks/        # TanStack Query hooks, chat streaming state

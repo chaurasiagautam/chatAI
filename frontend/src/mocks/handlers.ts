@@ -1,9 +1,15 @@
 import { delay, http, HttpResponse } from 'msw';
 import type { Conversation, Message } from '../api/types';
+import { endpoints } from '../config';
 import { conversations, entitlements, MOCK_VALID_TOKENS, type StoredConversation } from './data';
 
-const BASE = '/api/v1';
-const SCOPE = `${BASE}/clients/:clientId/products/:productId`;
+// Same URLs as the API client, with MSW path params.
+const url = {
+  entitlements: endpoints.entitlements(),
+  conversations: endpoints.conversations(':clientId', ':productId'),
+  conversation: endpoints.conversation(':clientId', ':productId', ':conversationId'),
+  messages: endpoints.messages(':clientId', ':productId', ':conversationId'),
+};
 
 type ScopeParams = { clientId: string; productId: string };
 type ConvParams = ScopeParams & { conversationId: string };
@@ -52,12 +58,12 @@ function fakeAnswer(question: string, clientId: string, productId: string): stri
 }
 
 export const handlers = [
-  http.get(`${BASE}/me/entitlements`, async ({ request }) => {
+  http.get(url.entitlements, async ({ request }) => {
     await delay(200);
     return authorize(request) ?? HttpResponse.json(entitlements);
   }),
 
-  http.get<ScopeParams>(`${SCOPE}/conversations`, async ({ request, params }) => {
+  http.get<ScopeParams>(url.conversations, async ({ request, params }) => {
     await delay(150);
     const denied = authorize(request, params);
     if (denied) return denied;
@@ -68,7 +74,7 @@ export const handlers = [
     return HttpResponse.json({ items });
   }),
 
-  http.post<ScopeParams, { title?: string }>(`${SCOPE}/conversations`, async ({ request, params }) => {
+  http.post<ScopeParams, { title?: string }>(url.conversations, async ({ request, params }) => {
     const denied = authorize(request, params);
     if (denied) return denied;
     const body = await request.json();
@@ -86,7 +92,7 @@ export const handlers = [
     return HttpResponse.json(toDto(conv), { status: 201 });
   }),
 
-  http.patch<ConvParams, { title: string }>(`${SCOPE}/conversations/:conversationId`, async ({ request, params }) => {
+  http.patch<ConvParams, { title: string }>(url.conversation, async ({ request, params }) => {
     const denied = authorize(request, params);
     if (denied) return denied;
     const conv = findConversation(params);
@@ -95,7 +101,7 @@ export const handlers = [
     return HttpResponse.json(toDto(conv));
   }),
 
-  http.delete<ConvParams>(`${SCOPE}/conversations/:conversationId`, ({ request, params }) => {
+  http.delete<ConvParams>(url.conversation, ({ request, params }) => {
     const denied = authorize(request, params);
     if (denied) return denied;
     const idx = conversations.findIndex((c) => c === findConversation(params));
@@ -104,7 +110,7 @@ export const handlers = [
     return new HttpResponse(null, { status: 204 });
   }),
 
-  http.get<ConvParams>(`${SCOPE}/conversations/:conversationId/messages`, async ({ request, params }) => {
+  http.get<ConvParams>(url.messages, async ({ request, params }) => {
     await delay(150);
     const denied = authorize(request, params);
     if (denied) return denied;
@@ -114,7 +120,7 @@ export const handlers = [
   }),
 
   http.post<ConvParams, { content: string }>(
-    `${SCOPE}/conversations/:conversationId/messages`,
+    url.messages,
     async ({ request, params }) => {
       const denied = authorize(request, params);
       if (denied) return denied;

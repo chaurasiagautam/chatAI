@@ -1,8 +1,7 @@
 import { clearToken, getAccessToken } from '../auth/token';
+import { endpoints, toUrl } from '../config';
 import { readSse } from './sse';
 import type { ChatStreamEvent, Conversation, Entitlements, Message, Page, Problem } from './types';
-
-const BASE = '/api/v1';
 
 export class ApiError extends Error {
   constructor(public readonly problem: Problem) {
@@ -10,8 +9,8 @@ export class ApiError extends Error {
   }
 }
 
-async function request(path: string, init: RequestInit = {}, token = getAccessToken()): Promise<Response> {
-  const res = await fetch(new URL(BASE + path, window.location.origin), {
+async function request(url: string, init: RequestInit = {}, token = getAccessToken()): Promise<Response> {
+  const res = await fetch(toUrl(url), {
     ...init,
     headers: {
       Accept: 'application/json',
@@ -39,40 +38,39 @@ function tryGetToken(): string | null {
   }
 }
 
-async function json<T>(path: string, init?: RequestInit, token?: string): Promise<T> {
-  const res = await request(path, init, token);
+async function json<T>(url: string, init?: RequestInit, token?: string): Promise<T> {
+  const res = await request(url, init, token);
   return res.status === 204 ? (undefined as T) : res.json();
 }
 
-const scope = (clientId: string, productId: string) =>
-  `/clients/${encodeURIComponent(clientId)}/products/${encodeURIComponent(productId)}`;
+const enc = encodeURIComponent;
 
 export const api = {
-  entitlements: () => json<Entitlements>('/me/entitlements'),
+  entitlements: () => json<Entitlements>(endpoints.entitlements()),
 
   /** Validates a pasted token: the backend resolves it via the entitlement service (401 if invalid). */
-  verifyToken: (token: string) => json<Entitlements>('/me/entitlements', undefined, token),
+  verifyToken: (token: string) => json<Entitlements>(endpoints.entitlements(), undefined, token),
 
   listConversations: (clientId: string, productId: string) =>
-    json<Page<Conversation>>(`${scope(clientId, productId)}/conversations`),
+    json<Page<Conversation>>(endpoints.conversations(enc(clientId), enc(productId))),
 
   createConversation: (clientId: string, productId: string, title?: string) =>
-    json<Conversation>(`${scope(clientId, productId)}/conversations`, {
+    json<Conversation>(endpoints.conversations(enc(clientId), enc(productId)), {
       method: 'POST',
       body: JSON.stringify({ title }),
     }),
 
   renameConversation: (clientId: string, productId: string, id: string, title: string) =>
-    json<Conversation>(`${scope(clientId, productId)}/conversations/${id}`, {
+    json<Conversation>(endpoints.conversation(enc(clientId), enc(productId), enc(id)), {
       method: 'PATCH',
       body: JSON.stringify({ title }),
     }),
 
   deleteConversation: (clientId: string, productId: string, id: string) =>
-    json<void>(`${scope(clientId, productId)}/conversations/${id}`, { method: 'DELETE' }),
+    json<void>(endpoints.conversation(enc(clientId), enc(productId), enc(id)), { method: 'DELETE' }),
 
   listMessages: (clientId: string, productId: string, id: string) =>
-    json<Page<Message>>(`${scope(clientId, productId)}/conversations/${id}/messages`),
+    json<Page<Message>>(endpoints.messages(enc(clientId), enc(productId), enc(id))),
 
   async *sendMessage(
     clientId: string,
@@ -81,7 +79,7 @@ export const api = {
     content: string,
     signal?: AbortSignal,
   ): AsyncGenerator<ChatStreamEvent> {
-    const res = await request(`${scope(clientId, productId)}/conversations/${conversationId}/messages`, {
+    const res = await request(endpoints.messages(enc(clientId), enc(productId), enc(conversationId)), {
       method: 'POST',
       headers: { Accept: 'text/event-stream' },
       body: JSON.stringify({ content, clientRequestId: crypto.randomUUID() }),
