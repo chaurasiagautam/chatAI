@@ -301,26 +301,34 @@ Move to **ElastiCache Serverless (Valkey)** only when state must be shared acros
 
 ## 8. UI
 
-**Stack (proposal):** React + TypeScript + Vite, TanStack Query (server state), `oidc-client-ts` (login, PKCE, token refresh), `react-markdown` + syntax highlighting for answers, `fetch` + `ReadableStream` for SSE (native `EventSource` can't send an `Authorization` header or POST).
+Implemented in `frontend/` — see [frontend/README.md](../frontend/README.md).
+
+**Stack:** React + TypeScript + Vite, React Router, TanStack Query (server state), `react-markdown` + GFM for answers, `fetch` + `ReadableStream` for SSE (native `EventSource` can't send an `Authorization` header or POST). `oidc-client-ts` (login, PKCE, token refresh) to be added. All HTTP calls are mocked with **MSW** until the backend exists (`VITE_USE_MOCKS`).
 
 ```
-┌──────────────────────────────────────────────────────────────────┐
-│  chatAI      Client: [ ACME Corp ▾ ]  Product: [ Payments ▾ ]  👤 │
-├───────────────────┬──────────────────────────────────────────────┤
-│ + New chat        │                                              │
-│                   │   👤 What were last quarter's chargebacks?   │
-│ Today             │                                              │
-│  • Chargebacks Q3 │   🤖 Chargebacks in Q3 were …                │
-│  • Fee schedule   │      Sources: [1] Q3 report  [2] Ops wiki    │
-│ Last 7 days       │                                              │
-│  • Onboarding SLA │                                              │
-│                   ├──────────────────────────────────────────────┤
-│                   │ [ Ask about ACME / Payments…           ] ➤   │
-└───────────────────┴──────────────────────────────────────────────┘
+┌────────────────────────┬─────────────────────────────────────────────┐
+│ ◆ chatAI          [◫]  │ ACME Corp · Payments   Q3 chargeback summary│
+│ ┌────────────────────┐ ├─────────────────────────────────────────────┤
+│ │ AC  Client         │ │                                             │
+│ │     ACME Corp    ⇅ │ │        What were last quarter's chargebacks?│
+│ └────────────────────┘ │                                             │
+│ PRODUCTS               │  ◆ Chargebacks in Q3 were …                 │
+│ ⌄ ▣ Payments           │    Sources: [1] Q3 report  [2] Ops wiki     │
+│   │ + New chat         │                                             │
+│   │ Q3 chargeback sum… │                                             │
+│   │ Fee schedule chan… │                                             │
+│ › ▣ Lending            │                                             │
+│ › ▣ Cards              │ ┌─────────────────────────────────────────┐ │
+│                        │ │ Message Payments…                    ➤  │ │
+├────────────────────────┤ └─────────────────────────────────────────┘ │
+│ JD  Jane Doe           │                                             │
+│     jane.doe@…         │                                             │
+└────────────────────────┴─────────────────────────────────────────────┘
 ```
 
-- Client/product pickers are populated from `/me/entitlements`. Switching either one reloads the sidebar for that scope.
-- Selected scope lives in the URL (`/c/{clientId}/p/{productId}/chat/{conversationId}`) so links are shareable/bookmarkable (still guarded by entitlements).
+- **Sidebar:** client switcher on top, expandable product tree in the middle, signed-in user at the bottom. Each product expands to "New chat" plus its conversations. The client list and products come from `/me/entitlements`. The sidebar collapses, and becomes an overlay on mobile.
+- Selecting a product opens a new chat window for that client/product; the first message creates the conversation.
+- Selected scope lives in the URL (`/c/{clientId}/p/{productId}/{conversationId}`) so links are shareable/bookmarkable (still guarded by entitlements).
 - A conversation never changes scope; starting a chat in another product = new conversation.
 - Token is held in memory by the OIDC lib and attached to every API call; 401 → silent refresh → retry once → else re-login.
 
@@ -398,6 +406,6 @@ For local development, `docker-compose` runs the API, **DynamoDB Local** and **W
 2. **Security** — entitlement filter, principal, scope + ownership checks, `/me` endpoints, tests.
 3. **Conversations CRUD** + message history.
 4. **Chat turn** — OrgAI client, SSE streaming, persistence, error handling.
-5. **UI** — login, pickers, sidebar, chat view with streaming + markdown.
+5. **UI** — sidebar, chat view with streaming + markdown on MSW mocks (done); OIDC login and switch to real backend (pending).
 6. **Infra** — Terraform/CDK for AWS, CI/CD pipelines.
 7. Hardening — rate limiting, observability dashboards, load test.
