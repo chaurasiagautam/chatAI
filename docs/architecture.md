@@ -3,7 +3,7 @@
 Internal ChatGPT-style assistant that lets employees chat with internal data through the existing **OrgAI** orchestration layer.
 Every conversation is scoped to exactly one **client** and one **product** the user is entitled to.
 
-> Status: design draft (v0.1). Code comes after this is agreed.
+> Status: design draft (v0.2 — DynamoDB + Caffeine chosen). Code comes after this is agreed.
 
 ---
 
@@ -46,7 +46,7 @@ flowchart LR
             subgraph ECS[ECS Fargate - private subnets]
                 API[chatai-api<br/>Spring Boot / Java 25<br/>Docker]
             end
-            RDS[(Aurora PostgreSQL<br/>conversations + messages)]
+            DDB[(DynamoDB<br/>conversations + messages)]
             SM[Secrets Manager]
         end
         CW[CloudWatch / X-Ray]
@@ -63,7 +63,7 @@ flowchart LR
     CF -- "/api/*" --> ALB --> API
     API -- "resolve user + entitlements" --> ENT
     API -- "chat request (stream)" --> ORG
-    API --> RDS
+    API --> DDB
     API -. secrets .-> SM
     API -. logs/metrics/traces .-> CW
     ECR -. image .-> ECS
@@ -73,7 +73,8 @@ flowchart LR
 
 - **Single origin via CloudFront** (`/` → S3, `/api/*` → ALB): no CORS, one TLS cert, WAF in one place. UI and backend still deploy independently.
 - **ECS Fargate** for the backend container: no cluster management, scales on CPU/request count. (EKS is a drop-in alternative if the org standardises on Kubernetes.)
-- **Aurora PostgreSQL** for chat history: relational fits the `user → client → product → conversation → message` hierarchy, and supports JSONB for OrgAI metadata (citations, sources).
+- **DynamoDB** for chat history: the access patterns are fixed key lookups, it is serverless with pay-per-request pricing, and TTL handles retention (see §7).
+- **Caffeine** in-process cache for entitlement lookups: free and nothing extra to run.
 - Entitlement service and OrgAI are reached privately (VPC peering / PrivateLink / Transit Gateway — whatever the org already uses).
 
 ---
@@ -93,8 +94,7 @@ flowchart TB
         S2[ChatService<br/>orchestrates a turn]
         EC[EntitlementClient<br/>RestClient + Caffeine cache<br/>+ Resilience4j]
         OC[OrgAiClient<br/>RestClient streaming<br/>+ Resilience4j]
-        R[(Spring Data JPA<br/>repositories)]
-        FW[Flyway migrations]
+        R[(Repositories<br/>DynamoDB Enhanced Client)]
     end
 
     F1 --> F2 --> C1 & C2 & C3
@@ -104,7 +104,6 @@ flowchart TB
     S2 --> S1
     S2 --> OC
     S1 --> R
-    FW --> R
 ```
 
 ### Tech choices
@@ -115,8 +114,8 @@ flowchart TB
 | Web | Spring MVC + `SseEmitter` | Simpler than WebFlux; virtual threads remove the scaling concern |
 | HTTP clients | Spring `RestClient` | For entitlement + OrgAI |
 | Resilience | Resilience4j | Timeouts, retry (entitlements only), circuit breaker |
-| Persistence | Spring Data JPA + PostgreSQL, Flyway | |
-| Cache | Caffeine (in-process) | Entitlement results; move to ElastiCache Redis only if needed |
+| Persistence | DynamoDB via AWS SDK v2 Enhanced Client | Tables defined in IaC; DynamoDB Local for dev/tests (Testcontainers) |
+| Cache | Caffeine (in-process) | Entitlement results; ElastiCache Serverless (Valkey) only if shared state is needed |
 | Security | Spring Security, custom filter | See §4 |
 | Observability | Micrometer + OpenTelemetry, JSON logs | Correlation id propagated to OrgAI |
 | API docs | springdoc-openapi | OpenAPI spec doubles as UI contract |
@@ -173,12 +172,12 @@ sequenceDiagram
     autonumber
     participant UI
     participant API as chatai-api
-    participant DB as PostgreSQL
+    participant DB as DynamoDB
     participant ORG as OrgAI
 
     UI->>API: POST /api/v1/clients/{c}/products/{p}/conversations/{id}/messages<br/>Accept: text/event-stream<br/>{ content, clientRequestId }
     API->>API: auth + entitlement + ownership (§4)
-    API->>DB: INSERT user message (status=COMPLETE)<br/>INSERT assistant message (status=STREAMING)
+    API->>DB: TransactWrite: idempotency marker + user message<br/>+ assistant placeholder (STREAMING) + conversation.updatedAt
     API->>DB: load last N messages (context window)
     API->>ORG: chat(userId, clientId, productId, history, content)
     loop tokens
@@ -186,8 +185,8 @@ sequenceDiagram
         API-->>UI: SSE event: delta
     end
     ORG-->>API: done (+ citations, usage)
-    API->>DB: UPDATE assistant message (content, citations, status=COMPLETE)
-    API->>DB: UPDATE conversation.updated_at (+ title if first turn)
+    API->>DB: UpdateItem assistant message (content, citations, status=COMPLETE)
+    API->>DB: UpdateItem conversation title (first turn only)
     API-->>UI: SSE event: done { messageId, citations }
     Note over API,UI: On OrgAI error/timeout → assistant status=FAILED,<br/>SSE event: error. UI offers "Retry".
 ```
@@ -247,42 +246,56 @@ event: error   data: {"code":"ORGAI_TIMEOUT","message":"…"}
 
 ---
 
-## 7. Data model
+## 7. Data model (DynamoDB)
 
-```mermaid
-erDiagram
-    CONVERSATION ||--o{ MESSAGE : contains
-    CONVERSATION {
-        uuid id PK
-        string user_id "from entitlement service"
-        string client_id
-        string product_id
-        string title
-        timestamptz created_at
-        timestamptz updated_at
-        timestamptz deleted_at "soft delete"
-    }
-    MESSAGE {
-        uuid id PK
-        uuid conversation_id FK
-        int seq "order within conversation"
-        string role "USER | ASSISTANT"
-        text content
-        string status "STREAMING | COMPLETE | FAILED"
-        jsonb citations
-        jsonb usage "tokens, latency"
-        string orgai_request_id
-        uuid client_request_id "idempotency, unique per conversation"
-        timestamptz created_at
-    }
-```
+**Database: Amazon DynamoDB, on-demand capacity.** Chat history only needs a few fixed lookups, and all of them map to keys. DynamoDB is serverless (nothing to patch, size or fail over), costs a few dollars a month at internal-tool volume, has built-in TTL for retention, and offers point-in-time recovery and KMS encryption as switches.
+Reconsider RDS PostgreSQL if full-text search across chats or ad-hoc SQL reporting becomes a requirement. Reporting alone can be served by DynamoDB export to S3 + Athena.
 
-Indexes:
-- `conversation (user_id, client_id, product_id, updated_at DESC) WHERE deleted_at IS NULL` — sidebar listing.
-- `message (conversation_id, seq)` unique — history load.
-- `message (conversation_id, client_request_id)` unique — idempotency.
+Two tables:
 
-No user/client/product tables — those are owned by the entitlement service; we only store their ids. Audit log (who asked what, in which scope) is derivable from these two tables; a separate append-only audit table/stream can be added if compliance requires it.
+### `chatai-conversations`
+
+| Attribute | Type | Notes |
+|---|---|---|
+| `scopeKey` **(PK)** | S | `{userId}#{clientId}#{productId}` — ownership and scope are part of the key |
+| `conversationId` **(SK)** | S | ULID |
+| `listUpdatedAt` | S | ISO-8601; sort key of LSI `byUpdatedAt`. **Removed on delete**, so deleted chats drop out of the sparse index |
+| `title` | S | |
+| `createdAt`, `updatedAt` | S | ISO-8601 |
+| `deletedAt` | S | Soft delete marker |
+| `expiresAt` | N | Epoch seconds; DynamoDB TTL purges soft-deleted chats after N days |
+
+### `chatai-messages`
+
+| Attribute | Type | Notes |
+|---|---|---|
+| `conversationId` **(PK)** | S | |
+| `sk` **(SK)** | S | `MSG#{messageId}` (ULID → time-ordered) or `REQ#{clientRequestId}` (idempotency marker) |
+| `role` | S | `USER` / `ASSISTANT` |
+| `content` | S | Item limit is 400 KB — far above any chat message |
+| `status` | S | `STREAMING` / `COMPLETE` / `FAILED` |
+| `citations`, `usage` | M / L | OrgAI metadata |
+| `orgaiRequestId` | S | |
+| `createdAt` | S | |
+| `expiresAt` | N | TTL — set when the parent conversation is deleted, or per retention policy |
+
+### Access patterns
+
+| Use case | Operation |
+|---|---|
+| Sidebar: my chats in this client/product, newest first | `Query` LSI `byUpdatedAt` on `scopeKey`, `ScanIndexForward=false`, paginated |
+| Open a conversation | `GetItem(scopeKey, conversationId)` — `scopeKey` is built from the authenticated user + the path, so another user's chat simply isn't found (→ 404) |
+| Load history | `Query` `chatai-messages` on `conversationId`, `begins_with(sk, "MSG#")`, newest first, paginated |
+| Send message (idempotent) | `TransactWriteItems`: put `REQ#{clientRequestId}` with `attribute_not_exists` + put user message + put assistant placeholder (`STREAMING`) + update conversation `updatedAt`/`listUpdatedAt` |
+| Finish answer | `UpdateItem` assistant message → content, citations, `COMPLETE`/`FAILED` |
+| Rename / delete | `UpdateItem` on conversation (delete = set `deletedAt`, `expiresAt`, remove `listUpdatedAt`) |
+
+No user/client/product tables — those are owned by the entitlement service; we only store their ids. Audit (who asked what, in which scope) is derivable from these tables; DynamoDB Streams → S3 can feed an append-only audit trail if compliance requires it.
+
+### Cache
+
+**Caffeine, in-process** — caches entitlement-service responses keyed by `sha256(token)`, TTL `min(5 min, token expiry)`. Free and nothing to operate; each ECS task warms its own cache.
+Move to **ElastiCache Serverless (Valkey)** only when state must be shared across tasks (e.g. cluster-wide per-user rate limiting) — the cache sits behind an interface so this is a config swap.
 
 ---
 
@@ -321,8 +334,9 @@ No user/client/product tables — those are owned by the entitlement service; we
 | Edge protection | AWS WAF on CloudFront, Shield Standard |
 | Backend | ECS Fargate service (≥ 2 tasks across AZs), image in ECR |
 | Load balancer | ALB (internal-facing from CloudFront via VPC origin, or public with CloudFront-only header/prefix-list restriction) |
-| Database | Aurora PostgreSQL (Multi-AZ), automated backups, encryption at rest (KMS) |
-| Secrets | Secrets Manager (DB creds, OrgAI/entitlement client credentials) |
+| Database | DynamoDB on-demand, point-in-time recovery, KMS encryption, TTL; accessed via VPC gateway endpoint |
+| Cache | Caffeine in the API process (no AWS resource); ElastiCache Serverless (Valkey) later if needed |
+| Secrets | Secrets Manager (OrgAI/entitlement client credentials); DynamoDB access via IAM task role, no DB password |
 | Observability | CloudWatch Logs/Metrics/Alarms, X-Ray / OTel collector |
 | DNS / TLS | Route 53 + ACM |
 | IaC | Terraform or AWS CDK (pick whatever the org uses) |
@@ -343,20 +357,20 @@ chatAI/
 │       ├── entitlement/    # EntitlementClient + cache
 │       ├── orgai/          # OrgAiClient (streaming)
 │       ├── chat/           # ConversationService, ChatService
-│       └── persistence/    # entities, repositories
+│       └── persistence/    # DynamoDB items, repositories
 ├── frontend/           # React + Vite + TS
 ├── infra/              # Terraform / CDK
-├── docker-compose.yml  # local: api + postgres + stub entitlement + stub OrgAI
+├── docker-compose.yml  # local: api + DynamoDB Local + stub entitlement + stub OrgAI
 └── docs/architecture.md
 ```
 
-For local development, `docker-compose` runs the API, PostgreSQL and **WireMock stubs** for the entitlement service and OrgAI so the whole thing runs without internal dependencies.
+For local development, `docker-compose` runs the API, **DynamoDB Local** and **WireMock stubs** for the entitlement service and OrgAI so the whole thing runs without internal dependencies.
 
 ---
 
 ## 11. Non-functional
 
-- **Security**: TLS everywhere; tokens never logged; prompt/answer content treated as confidential (no content in metrics/traces); DB encrypted; least-privilege IAM task role; input size limits on messages.
+- **Security**: TLS everywhere; tokens never logged; prompt/answer content treated as confidential (no content in metrics/traces); DynamoDB encrypted with KMS; least-privilege IAM task role scoped to the two tables; input size limits on messages.
 - **Rate limiting**: per-user limit on `POST …/messages` (Bucket4j in-app, plus WAF rate rule).
 - **Timeouts**: entitlement 2 s; OrgAI first-token 30 s, total 120 s (configurable).
 - **Scalability**: API is stateless (only cache is per-task) → horizontal scaling on ECS.
@@ -380,7 +394,7 @@ For local development, `docker-compose` runs the API, PostgreSQL and **WireMock 
 
 ## 13. Suggested delivery plan
 
-1. **Backend skeleton** — Spring Boot 4 / Java 25, Dockerfile, docker-compose with Postgres + WireMock stubs, Flyway schema, health checks.
+1. **Backend skeleton** — Spring Boot 4 / Java 25, Dockerfile, docker-compose with DynamoDB Local + WireMock stubs, table bootstrap for local dev, health checks.
 2. **Security** — entitlement filter, principal, scope + ownership checks, `/me` endpoints, tests.
 3. **Conversations CRUD** + message history.
 4. **Chat turn** — OrgAI client, SSE streaming, persistence, error handling.
