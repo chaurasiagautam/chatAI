@@ -1,5 +1,5 @@
-// Every URL the UI uses is configured in .env and resolved here. Nothing else
-// in src/ should hard-code an API path or read import.meta.env directly.
+// Every URL the UI uses comes from .env and is resolved here. Nothing in src/
+// hard-codes an API URL or path, or reads import.meta.env directly.
 
 function required(name: keyof ImportMetaEnv): string {
   const value = import.meta.env[name];
@@ -12,18 +12,30 @@ export const config = {
   apiBaseUrl: required('VITE_API_BASE_URL').replace(/\/+$/, ''),
 };
 
+type Params = Record<string, string>;
+
 /**
- * REST endpoints (docs/architecture.md §6). Arguments are inserted as given:
- * the API client passes URL-encoded ids, the MSW mocks pass `:param` patterns.
+ * Builds an endpoint from a path template in .env, e.g.
+ * `/clients/{clientId}/products/{productId}/conversations`. Values are inserted as
+ * given: the API client passes URL-encoded ids, the MSW mocks pass `:param` patterns.
  */
+function endpoint(name: keyof ImportMetaEnv) {
+  const template = required(name);
+  return (params: Params = {}) =>
+    config.apiBaseUrl +
+    template.replace(/\{(\w+)\}/g, (_, key: string) => {
+      const value = params[key];
+      if (value === undefined) throw new Error(`${name} needs {${key}}`);
+      return value;
+    });
+}
+
+/** REST endpoints (docs/architecture.md §6). Paths are configured in .env. */
 export const endpoints = {
-  entitlements: () => `${config.apiBaseUrl}/me/entitlements`,
-  conversations: (clientId: string, productId: string) =>
-    `${config.apiBaseUrl}/clients/${clientId}/products/${productId}/conversations`,
-  conversation: (clientId: string, productId: string, conversationId: string) =>
-    `${endpoints.conversations(clientId, productId)}/${conversationId}`,
-  messages: (clientId: string, productId: string, conversationId: string) =>
-    `${endpoints.conversation(clientId, productId, conversationId)}/messages`,
+  entitlements: endpoint('VITE_API_ENTITLEMENTS_PATH'),
+  conversations: endpoint('VITE_API_CONVERSATIONS_PATH'),
+  conversation: endpoint('VITE_API_CONVERSATION_PATH'),
+  messages: endpoint('VITE_API_MESSAGES_PATH'),
 };
 
 /** Resolves an endpoint against the page origin, so relative and absolute base URLs both work. */

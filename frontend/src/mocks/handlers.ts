@@ -3,12 +3,13 @@ import type { Conversation, Message } from '../api/types';
 import { endpoints } from '../config';
 import { conversations, entitlements, MOCK_VALID_TOKENS, type StoredConversation } from './data';
 
-// Same URLs as the API client, with MSW path params.
+// Same endpoint templates as the API client (.env), with MSW path params.
+const params = { clientId: ':clientId', productId: ':productId', conversationId: ':conversationId' };
 const url = {
   entitlements: endpoints.entitlements(),
-  conversations: endpoints.conversations(':clientId', ':productId'),
-  conversation: endpoints.conversation(':clientId', ':productId', ':conversationId'),
-  messages: endpoints.messages(':clientId', ':productId', ':conversationId'),
+  conversations: endpoints.conversations(params),
+  conversation: endpoints.conversation(params),
+  messages: endpoints.messages(params),
 };
 
 type ScopeParams = { clientId: string; productId: string };

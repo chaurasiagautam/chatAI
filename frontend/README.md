@@ -14,12 +14,16 @@ The app code makes real `fetch` calls; MSW intercepts them.
 
 ## Configuration — `.env`
 
-All URLs live in **`frontend/.env`** (Vite's equivalent of `application.properties`). `src/config.ts` reads it and builds every API endpoint; the API client, the MSW mocks and the dev server all use it.
+Every URL and API path lives in **`frontend/.env`** (Vite's equivalent of `application.properties`); nothing is hard-coded in `src/`. `src/config.ts` reads the file and fills the `{placeholders}` in the endpoint paths; the API client, the MSW mocks and the dev server all use it.
 
 | Property | Default | Meaning |
 |---|---|---|
 | `VITE_USE_MOCKS` | `true` | `true` = MSW answers every API call; `false` = call the real backend |
 | `VITE_API_BASE_URL` | `/api/v1` | Base URL of the REST API. Relative = same origin (proxied in dev, CloudFront in AWS); absolute = separate API host (needs CORS) |
+| `VITE_API_ENTITLEMENTS_PATH` | `/me/entitlements` | Token check + user's clients/products |
+| `VITE_API_CONVERSATIONS_PATH` | `/clients/{clientId}/products/{productId}/conversations` | List / create chats |
+| `VITE_API_CONVERSATION_PATH` | `…/conversations/{conversationId}` | Rename / delete a chat |
+| `VITE_API_MESSAGES_PATH` | `…/conversations/{conversationId}/messages` | Chat history / send a message (streamed) |
 | `VITE_BACKEND_URL` | `http://localhost:8080` | Dev server only — where a relative `VITE_API_BASE_URL` is proxied |
 | `VITE_DEV_PORT` | `5173` | Dev server only — port for `npm run dev` |
 
@@ -29,6 +33,8 @@ To change values on your machine without touching the committed file, create **`
 VITE_USE_MOCKS=false
 VITE_BACKEND_URL=http://localhost:8080
 ```
+
+Endpoint paths are appended to `VITE_API_BASE_URL`. Change the path text freely, but keep the `{clientId}`, `{productId}`, `{conversationId}` placeholder names — the app fills them in (URL-encoded) and fails with a clear error if one is missing.
 
 Per-environment builds can use `.env.production` / `.env.development`. Values are baked in at build time — restart `npm run dev` after editing.
 
@@ -45,7 +51,7 @@ Per-environment builds can use `.env.production` / `.env.development`. Values ar
 
 ```
 src/
-├── config.ts     # reads .env; every API URL/endpoint is defined here
+├── config.ts     # reads .env; builds every API URL from the configured base + path templates
 ├── api/          # REST client, types (mirror docs §6), SSE stream parser
 ├── auth/         # bearer token provider (placeholder until OIDC login)
 ├── hooks/        # TanStack Query hooks, chat streaming state

@@ -43,7 +43,12 @@ async function json<T>(url: string, init?: RequestInit, token?: string): Promise
   return res.status === 204 ? (undefined as T) : res.json();
 }
 
-const enc = encodeURIComponent;
+// URL-encoded path params for the endpoint templates in .env.
+const ids = (clientId: string, productId: string, conversationId?: string) => ({
+  clientId: encodeURIComponent(clientId),
+  productId: encodeURIComponent(productId),
+  ...(conversationId !== undefined && { conversationId: encodeURIComponent(conversationId) }),
+});
 
 export const api = {
   entitlements: () => json<Entitlements>(endpoints.entitlements()),
@@ -52,25 +57,25 @@ export const api = {
   verifyToken: (token: string) => json<Entitlements>(endpoints.entitlements(), undefined, token),
 
   listConversations: (clientId: string, productId: string) =>
-    json<Page<Conversation>>(endpoints.conversations(enc(clientId), enc(productId))),
+    json<Page<Conversation>>(endpoints.conversations(ids(clientId, productId))),
 
   createConversation: (clientId: string, productId: string, title?: string) =>
-    json<Conversation>(endpoints.conversations(enc(clientId), enc(productId)), {
+    json<Conversation>(endpoints.conversations(ids(clientId, productId)), {
       method: 'POST',
       body: JSON.stringify({ title }),
     }),
 
   renameConversation: (clientId: string, productId: string, id: string, title: string) =>
-    json<Conversation>(endpoints.conversation(enc(clientId), enc(productId), enc(id)), {
+    json<Conversation>(endpoints.conversation(ids(clientId, productId, id)), {
       method: 'PATCH',
       body: JSON.stringify({ title }),
     }),
 
   deleteConversation: (clientId: string, productId: string, id: string) =>
-    json<void>(endpoints.conversation(enc(clientId), enc(productId), enc(id)), { method: 'DELETE' }),
+    json<void>(endpoints.conversation(ids(clientId, productId, id)), { method: 'DELETE' }),
 
   listMessages: (clientId: string, productId: string, id: string) =>
-    json<Page<Message>>(endpoints.messages(enc(clientId), enc(productId), enc(id))),
+    json<Page<Message>>(endpoints.messages(ids(clientId, productId, id))),
 
   async *sendMessage(
     clientId: string,
@@ -79,7 +84,7 @@ export const api = {
     content: string,
     signal?: AbortSignal,
   ): AsyncGenerator<ChatStreamEvent> {
-    const res = await request(endpoints.messages(enc(clientId), enc(productId), enc(conversationId)), {
+    const res = await request(endpoints.messages(ids(clientId, productId, conversationId)), {
       method: 'POST',
       headers: { Accept: 'text/event-stream' },
       body: JSON.stringify({ content, clientRequestId: crypto.randomUUID() }),
